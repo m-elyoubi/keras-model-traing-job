@@ -14,9 +14,9 @@ def lambda_handler(event, context):
 
         
 
-        training_job_name = 'your-training-job-name'
+        training_job_name = "keras-model-traing-job"
         training_data_uri = f's3://{s3_bucket}/{s3_key}'
-        output_path = 's3://your-s3-bucket/path/to/save/model'
+        output_path = "s3://sagemaker-us-east-2-481102897331/data-output/"
 
         estimator = sagemaker.estimator.Estimator(
             role=role,

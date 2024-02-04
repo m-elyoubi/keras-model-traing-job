@@ -120,7 +120,8 @@ def train_and_predict_stock_price(rates_frame, symbol_name, s3_output_path):
 
 if __name__ == "__main__":
     # Use SageMaker-compatible paths
-    s3_output_path = 's3://your-s3-bucket/path/to/save/model'
+    s3_output_path = "s3://sagemaker-us-east-2-481102897331/data-output/"
+    s3_input_path = "s3://sagemaker-us-east-2-481102897331/data-input/"
     
     symbol_name = 'US30'
     rates_frame = pd.read_csv(f'C:/Meta/Combine_ScriptAlgoTrding/input_data/{symbol_name}.csv')

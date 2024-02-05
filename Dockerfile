@@ -2,7 +2,8 @@
 
 FROM tensorflow/tensorflow:latest
 
-RUN pip install sagemaker
+# Install additional dependencies
+RUN pip install sagemaker numpy pandas scikit-learn
 
 COPY train.py /opt/ml/code/train.py
 

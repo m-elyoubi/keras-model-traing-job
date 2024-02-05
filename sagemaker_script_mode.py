@@ -13,12 +13,12 @@ region = sagemaker_session.boto_session.region_name
 #-------------------------- Configuration: ----------------------------------
 date = datetime.now().strftime("%y%m%d-%H%M%S")
 ecr_image_uri = "481102897331.dkr.ecr.{}.amazonaws.com/keras-model-training-job-ecr:latest".format(region)
-instance_type = 'ml.p2.xlarge' # ml.p3.2xlarge, ml.p3.16xlarge
-device='gpu'
-custom_job_name = "{}-keras-model-traing-job-{}".format(date,device)
+instance_type = 'ml.p2.xlarge'  # ml.p3.2xlarge, ml.p3.16xlarge
+device = 'gpu'
+custom_job_name = "{}-keras-model-traing-job-{}".format(date, device)
 
 
-#-----------------------    Build a TensorFlow Estimator    --------------------
+# ----------------------- Build a TensorFlow Estimator --------------------
 # Specify S3 paths
 bucket_name = 'sagemaker-us-east-2-481102897331'
 symbol_name = 'US30'
@@ -28,15 +28,7 @@ input_file_key = f'data-input/{symbol_name}.csv'
 s3_output_path = f"s3://{bucket_name}/data-output/"
 s3_input_path = f"s3://{bucket_name}/data-input/"
 
-# Set up the SageMaker Estimator
-estimator = Estimator(image_uri=ecr_image_uri,
-                      role=role,
-                      instance_count=1,
-                      instance_type='ml.m5.xlarge',
-                      output_path=s3_output_path,
-                      sagemaker_session=sagemaker.Session())
-
-# Set hyperparameters and start the training job
+# Set up the SageMaker Estimator with hyperparameters
 hyperparameters = {
     'bucket_name': bucket_name,
     'symbol_name': symbol_name,
@@ -44,10 +36,17 @@ hyperparameters = {
     's3_output_path': s3_output_path
 }
 
-estimator.set_hyperparameters(**hyperparameters)
+estimator = Estimator(image_uri=ecr_image_uri,
+                      role=role,
+                      instance_count=1,
+                      instance_type=instance_type,
+                      output_path=s3_output_path,
+                      sagemaker_session=sagemaker.Session()
+                      )
 
 
 #-----------------------------  Start Training Job  -----------------------------------------
 
-estimator.fit({"training": sagemaker.inputs.TrainingInput(s3_input_path)}, job_name=custom_job_name, wait=True)
+# Start the SageMaker training job
+estimator.fit({'training': s3_input_path}, job_name=custom_job_name, wait=True, logs=True)
 

@@ -1,46 +1,3 @@
-# # train.py
-
-# import os
-# import numpy as np
-# from tensorflow.keras.models import Sequential
-# from tensorflow.keras.layers import Dense
-# from tensorflow.keras.optimizers import Adam
-# import boto3
-# from tensorflow.keras.models import load_model
-
-
-# # Load data from S3
-# def load_data():
-#     # Implement your code to load data from S3
-#     # Example: load data from 's3://your-s3-bucket/path/to/data'
-#     pass
-
-# # Define your Keras model
-# def create_model():
-#     model = Sequential()
-#     # Add your model architecture
-#     return model
-
-# # Train and save the model
-# def train_and_save_model():
-#     # Load data
-#     X_train, y_train = load_data()
-
-#     # Create and compile Keras model
-#     model = create_model()
-#     model.compile(optimizer=Adam(), loss='mean_squared_error')
-
-#     # Train the model
-#     model.fit(X_train, y_train, epochs=10)
-
-#     # Save the trained model to S3
-#     model.save("s3://your-s3-bucket/path/to/save/model/model.h5")
-
-# if __name__ == "__main__":
-#     train_and_save_model()
-
-
-# -------------------------------
 # train.py
 
 import pandas as pd
@@ -69,7 +26,52 @@ def load_data(bucket_name,file_key):
 
     # Convert the CSV content to a Pandas DataFrame
     df = pd.read_csv(StringIO(csv_content))
+    print(df[:2])
     return df
+
+
+def predict_next_n_minutes(stock_data, scaler, trained_model ,n_minutes=60):
+    
+    stock_data[['Date', 'Time']] = stock_data['time'].str.split(expand=True)
+    stock_data['Date'] = pd.to_datetime(stock_data['Date'])
+    stock_data['Time'] = pd.to_datetime(stock_data['Time'], format='%H:%M:%S').dt.time
+
+    last_n_minutes_data = stock_data[-n_minutes:].copy()
+    last_n_minutes_data_scaled = scaler.transform(last_n_minutes_data['close'].values.reshape(-1, 1))
+    last_n_minutes_data['close_scaled'] = last_n_minutes_data_scaled
+
+    # Create the input data
+    input_data = last_n_minutes_data['close_scaled'].values
+    input_data = np.reshape(input_data, (1, input_data.shape[0], 1))
+
+    next_n_minutes_data = []
+    prediction_times = []
+
+    for i in range(n_minutes):
+        predicted_price = trained_model.predict(input_data)[0, 0]
+        next_n_minutes_data.append(predicted_price)
+
+        # Update historical data for the next iteration
+        input_data = np.append(input_data[0, 1:], predicted_price)
+        input_data = np.reshape(input_data, (1, input_data.shape[0], 1))
+
+        # Get the timestamp for the current prediction
+        current_date = last_n_minutes_data['Date'].values[-1]
+        current_time = last_n_minutes_data['Time'].values[-1]
+        current_datetime = pd.Timestamp(f"{current_date} {current_time}")
+        current_timestamp = current_datetime + pd.DateOffset(minutes=(i + 1))
+        prediction_times.append(current_timestamp)
+
+    predicted_prices_original_scale = scaler.inverse_transform(np.array(next_n_minutes_data).reshape(-1, 1))
+
+    predicted_prices_df = pd.DataFrame({
+        'Date': prediction_times,
+        'Close_Predicted': predicted_prices_original_scale.flatten()
+    })
+
+    return predicted_prices_df
+
+
 
 def create_lstm_model(lstm_units=150, dropout_rate=0.2, learning_rate=0.001, epochs=3, batch_size=64, X_train=None,
                       y_train=None):
@@ -87,7 +89,7 @@ def create_lstm_model(lstm_units=150, dropout_rate=0.2, learning_rate=0.001, epo
     return model
 
 
-def train_and_predict_stock_price(rates_frame, symbol_name, s3_output_path):
+def train_and_predict_stock_price(bucket_name,rates_frame, symbol_name, s3_output_path):
     """Preprocesses data, trains the model, and saves it."""
     try:
         if rates_frame is not None:
@@ -107,9 +109,18 @@ def train_and_predict_stock_price(rates_frame, symbol_name, s3_output_path):
             # Use SageMaker-compatible paths
             model_filename = os.path.join('/opt/ml/model', f'model_{symbol_name}.h5')
             scaler_filename = os.path.join('/opt/ml/model', f'scaler_{symbol_name}.joblib')
-
+            
             model = create_lstm_model(lstm_units=150, dropout_rate=0.2, learning_rate=0.001, epochs=3, batch_size=64,
                                       X_train=X_train, y_train=y_train)
+            
+            pred_df= predict_next_n_minutes(rates_frame, sc, model, n_minutes=60)
+            print(pred_df[:2])
+            
+            csv_buffer = StringIO()
+            pred_df.to_csv(csv_buffer, index=False)
+            
+            s3_key= f'data-output/result_for_stock_rec/{symbol_name}.csv'
+            s3.put_object(Body=csv_buffer.getvalue(), Bucket=bucket_name, Key=s3_key)
             
             # Save model to S3
             model.save(model_filename)
@@ -119,11 +130,13 @@ def train_and_predict_stock_price(rates_frame, symbol_name, s3_output_path):
             s3_output_model_path = os.path.join(s3_output_path, f'model_{symbol_name}.h5')
             s3_output_scaler_path = os.path.join(s3_output_path, f'scaler_{symbol_name}.joblib')
             
-            sagemaker.s3.S3Uploader.upload(model_filename, s3_output_model_path)
-            sagemaker.s3.S3Uploader.upload(scaler_filename, s3_output_scaler_path)
+            model_s3_uri=sagemaker.s3.S3Uploader.upload(model_filename, s3_output_model_path)
+            scaler_s3_uri=sagemaker.s3.S3Uploader.upload(scaler_filename, s3_output_scaler_path)
 
-            return s3_output_model_path, s3_output_scaler_path
+            print(f"Model saved to: {model_s3_uri}")
+            print(f"Scaler saved to: {scaler_s3_uri}")
             
+            return pred_df, model_s3_uri, scaler_s3_uri
         else:
             # Handle the case when rates_frame is None
             print("Error: rates_frame is None.")
@@ -133,6 +146,8 @@ def train_and_predict_stock_price(rates_frame, symbol_name, s3_output_path):
         # Handle other exceptions if necessary
         print(f"An error occurred: {str(e)}")
         return None, None
+
+
 
 
 def _parse_args():
@@ -152,20 +167,16 @@ def _parse_args():
 if __name__ == "__main__":
 
     
-    args, unknown = _parse_args()
-    print(args)
-    
-    rates_frame = load_data(args.bucket_name, args.input_file_key)
-    train_and_predict_stock_price(rates_frame, args.symbol_name, args.s3_output_path)
+    # args, unknown = _parse_args()
+    # print(args)
+    # Specify S3 paths
+    bucket_name = 'sagemaker-us-east-2-481102897331'
+    symbol_name = 'US30'
 
-
-
-    # bucket_name=    'sagemaker-us-east-2-481102897331'
-    # symbol_name =   'US30'
-    # input_file_key=     f'data-input/{symbol_name}.csv'
-    # s3_output_path =     f"s3://{bucket_name}/data-output/"
-    # s3_input_path =     f"s3://{bucket_name}/data-input/"
+    # Define S3 input and output paths
+    input_file_key = f'data-input/{symbol_name}.csv'
+    s3_output_path = f"s3://{bucket_name}/data-output/"
     
-    
-    # rates_frame = load_data(bucket_name,input_file_key)
-    # train_and_predict_stock_price(rates_frame, symbol_name, s3_output_path)
+    rates_frame = load_data(bucket_name, input_file_key)
+    train_and_predict_stock_price(bucket_name, rates_frame, symbol_name, s3_output_path)
+
